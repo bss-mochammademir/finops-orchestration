@@ -1,4 +1,4 @@
-# Example configuration for finops-billing-sentinel (SCAFFOLD - WP1).
+# Example configuration for finops-billing-sentinel (SCAFFOLD - WP1, legacy parity WP1b).
 # Thresholds, colours and routing KEYS only. No credentials or endpoints:
 # those are resolved from Secret Manager at runtime (WP2). The loader rejects
 # keys that look like credentials and any value containing "://".
@@ -19,10 +19,46 @@ large_spike_pct = 100
 large_spike_delta_idr = 1000000
 # number of normal-confidence findings that makes a run "Ada Indikasi Anomali"
 anomaly_min_findings = 3
+# L2: a service is a "new cost source" when its prior amount is ~0 (<= this value)
+new_cost_prior_max_idr = 1000
+# L2: temuan_naik when delta >= this % of the project's prior-period total
+# (and delta >= spike_delta_min_idr), even if the service grew < spike_pct_min
+abs_rise_project_share_pct = 10
+# L8: watchlist outside the top projects
+watch_swing_pct = 50               # project swing |pct| >= this ...
+watch_swing_min_idr = 100000       # ... and |delta| >= this
+watch_new_cost_min_idr = 10000     # new service below new_cost_min_idr but >= this
+storage_growth_pct = 20            # storage grows >= this % ...
+storage_growth_min_idr = 50000     # ... and >= this amount ...
+compute_flat_pct = 5               # ... while compute grows <= this % (lifecycle hint)
+# L4: |pct| <= this counts as "flat" (improved/stable, still low)
+stable_pct_max = 10
 
 [classify]
 # Services with a known monthly billing cycle (lessons 8.2) -> lower-confidence
 cyclical_services = ["Cloud Monitoring", "Cloud Build"]
+# L3: periodic/annual costs (domain registration/renewal, TLS certificates,
+# annual licence/support) -> lower-confidence, never escalate status alone.
+# PROPOSAL: confirm exact billing service names against the billing export.
+periodic_services = ["Cloud Domains", "Certificate Manager", "Support"]
+# L3: a drop to exactly one of these fractions of the prior amount (e.g. half)
+# is treated as a pro-rated periodic charge -> lower-confidence.
+periodic_fractions = ["1/2", "1/3", "1/4", "2/3", "3/4"]
+periodic_fraction_tolerance_idr = 1
+# L8: storage growth without compute growth -> possible missing lifecycle policy
+storage_services = ["Cloud Storage"]
+compute_services = ["Compute Engine", "Cloud Run", "Cloud Run Functions", "Cloud Functions", "Kubernetes Engine", "App Engine"]
+
+[history]
+# L4: a temuan_naik seen in >= recurring_min_runs consecutive runs (incl. the
+# current run) stays flagged even below spike_pct_min.
+recurring_min_runs = 3
+# L5: legacy history JSON keeps at most this many entries (newest last).
+max_entries = 6
+
+[methodology]
+# L10: services that, on a row without project.id, hint at Gemini Enterprise.
+null_project_hint_services = ["Vertex AI Search"]
 
 [status]
 normal_border = "#f9a825"
@@ -47,6 +83,8 @@ lag_ratio = 0.7
 [report]
 pct_decimals = 2
 top_n_projects = 3
+# L6: project overview rows; the rest is folded into "Lainnya (N project)".
+overview_rows = 12
 
 [routing]
 # Space KEYS only (resolved to endpoints from Secret Manager in WP2). Team names, never people.

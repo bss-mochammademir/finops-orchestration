@@ -46,6 +46,28 @@ class Thresholds:
     large_spike_pct: Decimal = Decimal("100")
     large_spike_delta_idr: Decimal = Decimal("1000000")
     anomaly_min_findings: int = 3
+    # L2: "new cost source" when the prior amount is ~0 (<= this value).
+    new_cost_prior_max_idr: Decimal = Decimal("1000")
+    # L2: large absolute rise relative to the project's typical (prior-period) cost.
+    abs_rise_project_share_pct: Decimal = Decimal("10")
+    # L8: watchlist outside the top projects.
+    watch_swing_pct: Decimal = Decimal("50")
+    watch_swing_min_idr: Decimal = Decimal("100000")
+    watch_new_cost_min_idr: Decimal = Decimal("10000")
+    storage_growth_pct: Decimal = Decimal("20")
+    storage_growth_min_idr: Decimal = Decimal("50000")
+    compute_flat_pct: Decimal = Decimal("5")
+    # L4: |pct| at or below this counts as "flat" for continuity notes.
+    stable_pct_max: Decimal = Decimal("10")
+
+
+def _parse_fraction(v: Any) -> Decimal:
+    """``"1/2"`` -> ``Decimal('0.5')``; plain numbers are accepted too."""
+    text = str(v).strip()
+    if "/" in text:
+        num, den = text.split("/", 1)
+        return Decimal(num.strip()) / Decimal(den.strip())
+    return Decimal(text)
 
 
 @dataclass(frozen=True)
@@ -53,6 +75,27 @@ class Config:
     version: str = "0"
     thresholds: Thresholds = field(default_factory=Thresholds)
     cyclical_services: tuple[str, ...] = ("Cloud Monitoring", "Cloud Build")
+    periodic_services: tuple[str, ...] = ("Cloud Domains", "Certificate Manager", "Support")
+    """L3: services billed periodically/annually (domain, TLS certificate, annual support)."""
+    periodic_fractions: tuple[Decimal, ...] = tuple(
+        _parse_fraction(f) for f in ("1/2", "1/3", "1/4", "2/3", "3/4")
+    )
+    """L3: cur/prior ratios that indicate a pro-rated periodic charge."""
+    periodic_fraction_tolerance_idr: Decimal = Decimal("1")
+    storage_services: tuple[str, ...] = ("Cloud Storage",)
+    compute_services: tuple[str, ...] = (
+        "Compute Engine",
+        "Cloud Run",
+        "Cloud Run Functions",
+        "Cloud Functions",
+        "Kubernetes Engine",
+        "App Engine",
+    )
+    null_project_hint_services: tuple[str, ...] = ("Vertex AI Search",)
+    """L10: services that, on a null-project row, hint at Gemini Enterprise."""
+    recurring_min_runs: int = 3
+    """L4: consecutive runs (incl. the current one) after which a rise stays flagged."""
+    history_max_entries: int = 6
     status_colors: dict[str, str] = field(
         default_factory=lambda: {
             Status.NORMAL.name: "#2e7d32",
@@ -67,6 +110,8 @@ class Config:
     lag_ratio: Decimal = Decimal("0.7")
     pct_decimals: int = 2
     top_n_projects: int = 3
+    overview_rows: int = 12
+    """L6: project overview rows before the rest is folded into "Lainnya (N project)"."""
     review_space_key: str = "finops-review"
     team_space_keys: dict[str, str] = field(default_factory=dict)
     fingerprint: str = "default"
@@ -119,6 +164,15 @@ def config_from_dict(data: dict[str, Any]) -> Config:
         large_spike_pct=_dec(t.get("large_spike_pct", d.large_spike_pct)),
         large_spike_delta_idr=_dec(t.get("large_spike_delta_idr", d.large_spike_delta_idr)),
         anomaly_min_findings=int(t.get("anomaly_min_findings", d.anomaly_min_findings)),
+        new_cost_prior_max_idr=_dec(t.get("new_cost_prior_max_idr", d.new_cost_prior_max_idr)),
+        abs_rise_project_share_pct=_dec(t.get("abs_rise_project_share_pct", d.abs_rise_project_share_pct)),
+        watch_swing_pct=_dec(t.get("watch_swing_pct", d.watch_swing_pct)),
+        watch_swing_min_idr=_dec(t.get("watch_swing_min_idr", d.watch_swing_min_idr)),
+        watch_new_cost_min_idr=_dec(t.get("watch_new_cost_min_idr", d.watch_new_cost_min_idr)),
+        storage_growth_pct=_dec(t.get("storage_growth_pct", d.storage_growth_pct)),
+        storage_growth_min_idr=_dec(t.get("storage_growth_min_idr", d.storage_growth_min_idr)),
+        compute_flat_pct=_dec(t.get("compute_flat_pct", d.compute_flat_pct)),
+        stable_pct_max=_dec(t.get("stable_pct_max", d.stable_pct_max)),
     )
     base = Config()
     status = data.get("status", {})
@@ -130,10 +184,27 @@ def config_from_dict(data: dict[str, Any]) -> Config:
     val = data.get("validator", {})
     rep = data.get("report", {})
     routing = data.get("routing", {})
+    cls = data.get("classify", {})
+    hist = data.get("history", {})
+    meth = data.get("methodology", {})
     return Config(
         version=str(data.get("version", base.version)),
         thresholds=thresholds,
-        cyclical_services=tuple(data.get("classify", {}).get("cyclical_services", base.cyclical_services)),
+        cyclical_services=tuple(cls.get("cyclical_services", base.cyclical_services)),
+        periodic_services=tuple(cls.get("periodic_services", base.periodic_services)),
+        periodic_fractions=(
+            tuple(_parse_fraction(f) for f in cls["periodic_fractions"])
+            if "periodic_fractions" in cls
+            else base.periodic_fractions
+        ),
+        periodic_fraction_tolerance_idr=_dec(
+            cls.get("periodic_fraction_tolerance_idr", base.periodic_fraction_tolerance_idr)
+        ),
+        storage_services=tuple(cls.get("storage_services", base.storage_services)),
+        compute_services=tuple(cls.get("compute_services", base.compute_services)),
+        null_project_hint_services=tuple(meth.get("null_project_hint_services", base.null_project_hint_services)),
+        recurring_min_runs=int(hist.get("recurring_min_runs", base.recurring_min_runs)),
+        history_max_entries=int(hist.get("max_entries", base.history_max_entries)),
         status_colors=colors,
         normal_border=status.get("normal_border", base.normal_border),
         lower_confidence_border=status.get("lower_confidence_border", base.lower_confidence_border),
@@ -142,6 +213,7 @@ def config_from_dict(data: dict[str, Any]) -> Config:
         lag_ratio=_dec(val.get("lag_ratio", base.lag_ratio)),
         pct_decimals=int(rep.get("pct_decimals", base.pct_decimals)),
         top_n_projects=int(rep.get("top_n_projects", base.top_n_projects)),
+        overview_rows=int(rep.get("overview_rows", base.overview_rows)),
         review_space_key=routing.get("review_space_key", base.review_space_key),
         team_space_keys=dict(routing.get("team_space_keys", {})),
         fingerprint=_fingerprint(data),

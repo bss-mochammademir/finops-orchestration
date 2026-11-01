@@ -8,6 +8,7 @@ owner/PIC data) and pass the validator like any other text.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Protocol, runtime_checkable
 
 from .classify import counted_findings, is_large_spike
@@ -19,6 +20,11 @@ _MONTHS_ID = (
     "Januari", "Februari", "Maret", "April", "Mei", "Juni",
     "Juli", "Agustus", "September", "Oktober", "November", "Desember",
 )
+
+
+def format_date_id(d: date) -> str:
+    """``2026-10-18`` -> ``'18 Oktober 2026'`` (Indonesian long date)."""
+    return f"{d.day} {_MONTHS_ID[d.month - 1]} {d.year}"
 
 
 def format_period_id(p: Period) -> str:

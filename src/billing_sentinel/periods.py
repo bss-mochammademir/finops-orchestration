@@ -6,6 +6,9 @@ sustained use discounts). The primary comparison is therefore the *same half of
 the previous month* (MoM); the immediately preceding half is kept as a
 secondary comparison. Halves have different lengths (13-16 days), so callers
 must also report daily averages.
+
+``legacy14`` reproduces the legacy routine window (14 days ending yesterday vs
+the 14 days before) for the parallel run only (WP1b, L1).
 """
 
 from __future__ import annotations
@@ -81,8 +84,28 @@ def triage_period(as_of: date) -> Period:
     return Period(half.start, yesterday)
 
 
+LEGACY_WINDOW_DAYS = 14
+
+
+def legacy14_periods(as_of: date, days: int = LEGACY_WINDOW_DAYS) -> PeriodSet:
+    """Legacy routine window (L1), used only for the parallel run.
+
+    Current = the ``days`` days ending *yesterday* (by ``usage_start_time``, i.e.
+    ``charge_date``); comparison = the ``days`` days immediately before. There is
+    no secondary comparison. Example: as_of 2026-11-01 -> 2026-10-18..31 vs
+    2026-10-04..17.
+    """
+    end = as_of - timedelta(days=1)
+    current = Period(end - timedelta(days=days - 1), end)
+    prior_end = current.start - timedelta(days=1)
+    prior = Period(prior_end - timedelta(days=days - 1), prior_end)
+    return PeriodSet(current=current, mom=prior, prior_half=None)
+
+
 def resolve_periods(mode: Mode | str, as_of: date) -> PeriodSet:
     mode = Mode(mode)
+    if mode is Mode.LEGACY14:
+        return legacy14_periods(as_of)
     current = report_period(as_of) if mode is Mode.REPORT else triage_period(as_of)
     return PeriodSet(
         current=current,

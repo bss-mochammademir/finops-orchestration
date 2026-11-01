@@ -58,6 +58,19 @@ class FindingState(Enum):
 class Mode(Enum):
     TRIAGE = "triage"
     REPORT = "report"
+    LEGACY14 = "legacy14"
+    """14 days ending yesterday vs the 14 days before (legacy routine, parallel run only)."""
+
+
+PROJECT_SERVICE_SEP = " — "
+"""Separator of the mandatory "Project — Service" label of every finding (L13)."""
+
+
+def make_finding_key(project_id: str, service_name: str, ftype: "FindingType | str") -> str:
+    """Stable key = hash(project_id, service_name, type) (doc 11 §4 (5))."""
+    tval = ftype.value if isinstance(ftype, Enum) else str(ftype)
+    raw = f"{project_id}|{service_name}|{tval}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True)
@@ -157,6 +170,10 @@ class Finding:
     driver_sku: str | None = None
     rule: str = ""
     level: str = "service"
+    note: str = ""
+    """Short deterministic explanation (e.g. periodic cost, recurring, lifecycle hint)."""
+    recurring_count: int = 0
+    """Consecutive runs (including this one) in which this finding appeared; 0 = unknown/new."""
 
     @property
     def delta(self) -> Decimal:
@@ -169,10 +186,13 @@ class Finding:
         return (self.cur - self.prior) / abs(self.prior) * 100
 
     @property
+    def label(self) -> str:
+        """Mandatory "Project — Service" label (L13)."""
+        return f"{self.project_id}{PROJECT_SERVICE_SEP}{self.service_name}"
+
+    @property
     def finding_key(self) -> str:
-        """Stable key = hash(project_id, service_name, type) (doc 11 §4 (5))."""
-        raw = f"{self.project_id}|{self.service_name}|{self.type.value}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+        return make_finding_key(self.project_id, self.service_name, self.type)
 
 
 @dataclass(frozen=True)
@@ -235,3 +255,16 @@ class RunResult:
     validation: ValidationReport = field(default_factory=ValidationReport)
     route: str = "review"
     """``dispatch`` when validation passed, otherwise ``review`` (internal review, D-2)."""
+    project_overview: tuple[Line, ...] = ()
+    """Top ``overview_rows`` projects plus one "Lainnya (N project)" line (L6)."""
+    service_breakdown: dict[str, tuple[Line, ...]] = field(default_factory=dict)
+    """Per-service lines for each top project (L7)."""
+    sku_drilldowns: dict[tuple[str, str], tuple[Line, ...]] = field(default_factory=dict)
+    """SKU lines for new cost sources and large drops, keyed by (project, service) (L7)."""
+    methodology_notes: tuple[str, ...] = ()
+    """History gap, project name change, null project hints (L5, L9, L10)."""
+    history_notes: tuple[str, ...] = ()
+    """Continuity notes from earlier runs: improved/stable, already known (L4)."""
+    subject: str = ""
+    plain_text: str = ""
+    """Plain-text email body (L11); validated by the quality gate like the narrative."""

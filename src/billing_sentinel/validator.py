@@ -9,7 +9,10 @@ Checks:
    within an explicit rounding tolerance;
 4. status is consistent with the findings;
 5. ``finding_events``: ``acknowledged_normal`` requires ``expires_on``;
-6. last-day lag detection (lessons §8.3) produces an automatic note.
+6. last-day lag detection (lessons §8.3) produces an automatic note;
+7. every finding names a concrete "Project — Service" (L13), and every counted
+   finding is named in the narrative; every finding is named in the plain-text
+   body, whose numbers are checked like the narrative (L11).
 """
 
 from __future__ import annotations
@@ -20,10 +23,11 @@ from collections.abc import Iterable, Mapping
 from datetime import date
 from decimal import Decimal
 
-from .classify import derive_status
+from .classify import counted_findings, derive_status
 from .config import Config
 from .domain import (
     ZERO,
+    Finding,
     FindingEvent,
     FindingState,
     Line,
@@ -38,6 +42,14 @@ APPROVAL_PHRASE_RE = re.compile(r"siap\s*(di[\s-]?)?(setujui|approve)", re.IGNOR
 
 
 # --------------------------------------------------------------------------- numbers
+def _detail_lines(result: RunResult) -> list[Line]:
+    """Overview (L6), service breakdown and SKU drill-down (L7) lines."""
+    out = list(result.project_overview)
+    for group in (*result.service_breakdown.values(), *result.sku_drilldowns.values()):
+        out.extend(group)
+    return out
+
+
 def computed_amounts(result: RunResult) -> set[Decimal]:
     """All amounts (absolute, rounded to whole Rupiah) the code computed for a run."""
     vals: list[Decimal] = []
@@ -46,6 +58,7 @@ def computed_amounts(result: RunResult) -> set[Decimal]:
         lines.append(result.secondary_total)
     for view_lines in result.views.values():
         lines.extend(view_lines)
+    lines.extend(_detail_lines(result))
     for ln in lines:
         vals += [ln.cur, ln.prior, ln.delta]
     for f in result.findings:
@@ -60,6 +73,7 @@ def computed_percentages(result: RunResult) -> list[Decimal]:
         pcts.append(result.secondary_total.pct_change)
     for view_lines in result.views.values():
         pcts += [ln.pct_change for ln in view_lines]
+    pcts += [ln.pct_change for ln in _detail_lines(result)]
     pcts += [f.pct_change for f in result.findings]
     if result.daily_avg_prior:
         pcts.append((result.daily_avg_cur - result.daily_avg_prior) / abs(result.daily_avg_prior) * 100)
@@ -109,8 +123,10 @@ def check_reconciliation(result: RunResult, tolerance_idr: Decimal) -> list[Viol
     out: list[Violation] = []
     for attr in ("cur", "prior"):
         total = getattr(result.total, attr)
-        for view in ("category", "project"):
-            lines = result.views.get(view, ())
+        views = {v: result.views.get(v, ()) for v in ("category", "project")}
+        if result.project_overview:
+            views["project_overview"] = result.project_overview
+        for view, lines in views.items():
             raw = sum((getattr(ln, attr) for ln in lines), ZERO)
             shown = sum((round_idr(getattr(ln, attr)) for ln in lines), ZERO)
             if abs(raw - total) > tolerance_idr:
@@ -174,6 +190,21 @@ def last_day_lag_note(daily: Mapping[date, Decimal], period: Period, ratio: Deci
     )
 
 
+# --------------------------------------------------------------------------- L13 labels
+def check_finding_labels(findings: Iterable[Finding]) -> list[Violation]:
+    """Every finding must name a concrete project and service (L13)."""
+    out: list[Violation] = []
+    for f in findings:
+        if not f.project_id.strip() or not f.service_name.strip() or f.service_name.strip() == "*":
+            out.append(Violation("finding_label_missing", f"finding {f.finding_key} lacks 'Project — Service'"))
+    return out
+
+
+def check_findings_named(text: str, findings: Iterable[Finding], code: str) -> list[Violation]:
+    """Each finding's "Project — Service" label must appear verbatim in ``text`` (L13)."""
+    return [Violation(code, f"'{f.label}' not named in text") for f in findings if f.label not in text]
+
+
 # --------------------------------------------------------------------------- entry point
 def validate_run(
     result: RunResult,
@@ -190,4 +221,17 @@ def validate_run(
     violations += check_reconciliation(result, cfg.reconciliation_tolerance_idr)
     violations += check_status(result, cfg)
     violations += check_finding_events(events)
+    violations += check_finding_labels(result.findings)
+    violations += check_findings_named(text, counted_findings(result.findings), "finding_not_named")
+    if result.plain_text:
+        # The plain-text body is checked exactly like the narrative (L11, L12).
+        violations += [
+            Violation("plain_text_" + v.code, v.message)
+            for v in check_narrative_numbers(
+                result.plain_text, computed_amounts(result), computed_percentages(result),
+                cfg.shorthand_tolerance_units,
+            )
+            + check_no_approval_wording(result.plain_text)
+        ]
+        violations += check_findings_named(result.plain_text, result.findings, "plain_text_finding_not_named")
     return ValidationReport(tuple(violations))

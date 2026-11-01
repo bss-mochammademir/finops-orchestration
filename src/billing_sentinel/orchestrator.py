@@ -1,4 +1,9 @@
-"""Run orchestration (ABB A01): periods -> fetch -> aggregate -> classify -> narrate -> validate.
+"""Run orchestration (ABB A01): periods -> fetch -> aggregate -> classify -> history -> narrate -> render -> validate.
+
+Modes: ``report`` / ``triage`` (half-month, MoM) and ``legacy14`` (14 days ending
+yesterday vs the 14 days before; legacy routine parity, used for the parallel
+run only). A failing quality gate routes the run to internal review; there is
+no way to force a send (L12, D-2).
 
 ``run`` is pure with respect to its inputs: no network, no clock, no randomness.
 Rendering and dispatch are WP2+/WP3 and are not invoked here.
@@ -8,13 +13,14 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import date
 
-from . import analytics, coverage
-from .classify import classify, derive_status
+from . import analytics, coverage, render
+from .classify import classify, derive_status, sort_findings
 from .config import Config
-from .domain import FindingEvent, Mode, Period, PeriodSet, RunResult
+from .domain import FindingEvent, FindingType, Mode, Period, PeriodSet, RunResult
+from .history import HistoryEntry, apply_history, gap_note
 from .narrative import NarrativeProvider, TemplateNarrativeProvider
 from .periods import daily_average, resolve_periods
 from .sources import CostSource
@@ -40,11 +46,13 @@ def run(
     periods: PeriodSet | None = None,
     narrative_provider: NarrativeProvider | None = None,
     finding_events: Iterable[FindingEvent] = (),
+    history: Sequence[HistoryEntry] = (),
 ) -> RunResult:
     """Execute one deterministic run.
 
-    ``periods`` overrides the calendar-derived periods (used to replay the
-    legacy 14-vs-14-day run in regression tests or for backfills).
+    ``periods`` overrides the calendar-derived periods (backfills/replays).
+    ``history`` holds earlier runs, oldest first (e.g. the imported legacy JSON),
+    for the continuity rules and the gap check.
     """
     mode = Mode(mode)
     ps = periods or resolve_periods(mode, as_of)
@@ -60,8 +68,24 @@ def run(
         secondary = analytics.total_line(cur, ph)
 
     views = {v: analytics.compare(cur, prior, v) for v in ("project", "service", "category", "project_service")}
-    findings = classify(cur, prior, config)
+    findings, history_notes = apply_history(classify(cur, prior, config), views["project_service"], history, config)
+    findings = sort_findings(findings)
     status = derive_status(findings, config)
+    top = analytics.top_projects(views["project"], config.top_n_projects)
+    drill_keys = [
+        (f.project_id, f.service_name)
+        for f in findings
+        if f.level == "service" and (f.rule == "new_cost_source" or f.type is FindingType.PENURUNAN_BESAR)
+    ]
+    methodology = [
+        n
+        for n in (
+            gap_note(history, ps.current),
+            analytics.project_rename_note(cur),
+            analytics.null_project_hint_note(cur, prior, config.null_project_hint_services),
+        )
+        if n
+    ]
 
     notes: list[str] = []
     lag = last_day_lag_note(cur.daily, ps.current, config.lag_ratio)
@@ -88,9 +112,14 @@ def run(
         daily_avg_cur=daily_average(cur.total, ps.current),
         daily_avg_prior=daily_average(prior.total, ps.mom),
         secondary_total=secondary,
-        top_projects=analytics.top_projects(views["project"], config.top_n_projects),
+        top_projects=top,
         unmapped_projects=unmapped,
         notes=tuple(notes),
+        project_overview=analytics.project_overview(views["project"], config.overview_rows),
+        service_breakdown=analytics.service_breakdown(cur, prior, top),
+        sku_drilldowns={k: analytics.sku_drilldown(cur, prior, *k) for k in drill_keys},
+        methodology_notes=tuple(methodology),
+        history_notes=history_notes,
     )
 
     provider = narrative_provider or TemplateNarrativeProvider()
@@ -102,8 +131,14 @@ def run(
         result = dataclasses.replace(
             result, notes=result.notes + (f"Narasi model tidak tersedia ({type(exc).__name__}); dipakai narasi template.",)
         )
-    result = dataclasses.replace(result, narrative=text)
+    result = dataclasses.replace(result, narrative=text, subject=render.build_subject(result))
+    result = dataclasses.replace(result, plain_text=render.build_plain_text(result, config))
 
     # A failing quality gate routes to internal review, never to recipients (D-2).
     report = validate_run(result, config, events=finding_events)
     return dataclasses.replace(result, validation=report, route="dispatch" if report.ok else "review")
+
+
+def is_dispatchable(result: RunResult) -> bool:
+    """True only for a run that passed the quality gate (L12). There is no override."""
+    return result.validation.ok and result.route == "dispatch"
