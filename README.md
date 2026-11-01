@@ -36,9 +36,11 @@ src/billing_sentinel/
   money.py         format Rupiah + parser shorthand "ribu/juta/miliar"
   validator.py     quality gate
   config.py        loader TOML (tomllib)
-  orchestrator.py  run(mode, as_of, source, config) -> RunResult, run_id deterministik
+  orchestrator.py  run(mode, as_of, source, config, history=...) -> RunResult, run_id deterministik
+  history.py       impor JSON histori lama (skema v1) + aturan kontinuitas (recurring, gap) — WP1b
   narrative.py     Protocol NarrativeProvider + TemplateNarrativeProvider (tanpa model bahasa)
-  render.py, dispatch.py, scoring.py   stub NotImplementedError (WP2–WP4)
+  render.py        subjek + plain-text body (WP1b); HTML/PDF stub (WP3/WP4)
+  dispatch.py, scoring.py   stub NotImplementedError (WP2–WP4)
 sql/               fact_daily_cost.sql (scheduled query), ddl.sql
 config/example.toml
 tests/             pytest; fixture regresi di tests/fixtures/oct2026.py
@@ -77,6 +79,10 @@ infra/README.md    placeholder IaC (WP2)
 | Angka narasi ⊂ angka hitungan; shorthand harus cocok | `validator.check_narrative_numbers` | `test_validator.py` |
 | Hari terakhir < 0,7 × median harian → catatan otomatis | `validator.last_day_lag_note` | `test_validator.py`, `test_orchestrator.py` |
 | `run_id` sama untuk (mode, periode, versi config) yang sama | `orchestrator.make_run_id` | `test_orchestrator.py` |
+
+## Paritas routine lama (WP1b)
+
+Mode `legacy14` (14 hari berakhir kemarin vs 14 hari sebelumnya) dan aturan L1–L13 routine lama dipetakan ke modul dan test di [`docs/legacy-routine-parity.md`](docs/legacy-routine-parity.md). Mode ini khusus untuk *parallel run*.
 
 ## Data regresi
 
