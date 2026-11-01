@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+.coverage
+htmlcov/
+# Never commit local secrets or real billing extracts
+.env
+*.env
+*.tsv
+*.csv
+!tests/fixtures/*.csv
+config/local*.toml

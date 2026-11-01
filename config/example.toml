@@ -1,0 +1,57 @@
+# Example configuration for finops-billing-sentinel (SCAFFOLD - WP1).
+# Thresholds, colours and routing KEYS only. No credentials or endpoints:
+# those are resolved from Secret Manager at runtime (WP2). The loader rejects
+# keys that look like credentials and any value containing "://".
+
+version = "2026.11-wp1"
+
+[thresholds]
+# temuan_naik (spike): pct >= spike_pct_min AND delta >= spike_delta_min_idr
+spike_pct_min = 25
+spike_delta_min_idr = 250000
+# temuan_naik (new cost source in an existing project) / watchlist_new_cost (new project)
+new_cost_min_idr = 100000
+# penurunan_besar (context only, does not change status)
+drop_pct_min = 25
+drop_delta_min_idr = 500000
+# large spike -> "Ada Indikasi Anomali" on its own
+large_spike_pct = 100
+large_spike_delta_idr = 1000000
+# number of normal-confidence findings that makes a run "Ada Indikasi Anomali"
+anomaly_min_findings = 3
+
+[classify]
+# Services with a known monthly billing cycle (lessons 8.2) -> lower-confidence
+cyclical_services = ["Cloud Monitoring", "Cloud Build"]
+
+[status]
+normal_border = "#f9a825"
+lower_confidence_border = "#9aa5b1"
+
+[status.colors]
+normal = "#2e7d32"
+perlu_perhatian = "#f9a825"
+anomali = "#c62828"
+
+[reconciliation]
+# Explicit rounding tolerance (IDR) for sum(category) == sum(project) == total.
+# Inherited from the prototype assert (+/-40); theoretical max is 0.5 x rows.
+tolerance_idr = 40
+
+[validator]
+# Shorthand "X ribu/juta/miliar" must be within N units of its last displayed digit.
+shorthand_tolerance_units = 1
+# Last day of period below lag_ratio x median daily cost -> automatic note.
+lag_ratio = 0.7
+
+[report]
+pct_decimals = 2
+top_n_projects = 3
+
+[routing]
+# Space KEYS only (resolved to endpoints from Secret Manager in WP2). Team names, never people.
+review_space_key = "finops-review"
+
+[routing.team_space_keys]
+platform-network = "space-platform-network"
+digital-channel = "space-digital-channel"
